@@ -574,8 +574,8 @@ public class ClientWorker implements Closeable {
         this.enableRemoteSyncConfig = Boolean
                 .parseBoolean(properties.getProperty(PropertyKeyConst.ENABLE_REMOTE_SYNC_CONFIG));
 
-        this.longPollingThreadSize = Integer
-                .parseInt(properties.getProperty(PropertyKeyConst.LONG_POLLING_THREAD_SIZE, Constants.LONG_POLLING_THREAD_SIZE));
+        this.longPollingThreadSize = Integer.parseInt(
+                properties.getProperty(PropertyKeyConst.LONG_POLLING_THREAD_SIZE, Constants.LONG_POLLING_THREAD_SIZE));
     }
 
     @Override
