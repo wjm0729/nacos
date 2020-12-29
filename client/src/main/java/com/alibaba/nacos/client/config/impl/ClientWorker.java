@@ -49,15 +49,13 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.alibaba.nacos.api.common.Constants.CONFIG_TYPE;
 import static com.alibaba.nacos.api.common.Constants.LINE_SEPARATOR;
 import static com.alibaba.nacos.api.common.Constants.WORD_SEPARATOR;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 /**
  * Long polling.
@@ -65,9 +63,9 @@ import static com.alibaba.nacos.api.common.Constants.WORD_SEPARATOR;
  * @author Nacos
  */
 public class ClientWorker implements Closeable {
-    
+
     private static final Logger LOGGER = LogUtils.logger(ClientWorker.class);
-    
+
     /**
      * Add listeners for data.
      *
@@ -82,7 +80,7 @@ public class ClientWorker implements Closeable {
             cache.addListener(listener);
         }
     }
-    
+
     /**
      * Remove listener.
      *
@@ -100,7 +98,7 @@ public class ClientWorker implements Closeable {
             }
         }
     }
-    
+
     /**
      * Add listeners for tenant.
      *
@@ -118,7 +116,7 @@ public class ClientWorker implements Closeable {
             cache.addListener(listener);
         }
     }
-    
+
     /**
      * Add listeners for tenant with content.
      *
@@ -138,7 +136,7 @@ public class ClientWorker implements Closeable {
             cache.addListener(listener);
         }
     }
-    
+
     /**
      * Remove listeners for tenant.
      *
@@ -157,7 +155,7 @@ public class ClientWorker implements Closeable {
             }
         }
     }
-    
+
     private void removeCache(String dataId, String group) {
         String groupKey = GroupKey.getKey(dataId, group);
         synchronized (cacheMap) {
@@ -166,10 +164,10 @@ public class ClientWorker implements Closeable {
             cacheMap.set(copy);
         }
         LOGGER.info("[{}] [unsubscribe] {}", this.agent.getName(), groupKey);
-        
+
         MetricsMonitor.getListenConfigCountMonitor().set(cacheMap.get().size());
     }
-    
+
     void removeCache(String dataId, String group, String tenant) {
         String groupKey = GroupKey.getKeyTenant(dataId, group, tenant);
         synchronized (cacheMap) {
@@ -178,10 +176,10 @@ public class ClientWorker implements Closeable {
             cacheMap.set(copy);
         }
         LOGGER.info("[{}] [unsubscribe] {}", agent.getName(), groupKey);
-        
+
         MetricsMonitor.getListenConfigCountMonitor().set(cacheMap.get().size());
     }
-    
+
     /**
      * Add cache data if absent.
      *
@@ -194,10 +192,10 @@ public class ClientWorker implements Closeable {
         if (null != cache) {
             return cache;
         }
-        
+
         String key = GroupKey.getKey(dataId, group);
         cache = new CacheData(configFilterChainManager, agent.getName(), dataId, group);
-        
+
         synchronized (cacheMap) {
             CacheData cacheFromMap = getCache(dataId, group);
             // multiple listeners on the same dataid+group and race condition,so double check again
@@ -210,19 +208,19 @@ public class ClientWorker implements Closeable {
                 int taskId = cacheMap.get().size() / (int) ParamUtil.getPerTaskConfigSize();
                 cache.setTaskId(taskId);
             }
-            
+
             Map<String, CacheData> copy = new HashMap<String, CacheData>(cacheMap.get());
             copy.put(key, cache);
             cacheMap.set(copy);
         }
-        
+
         LOGGER.info("[{}] [subscribe] {}", this.agent.getName(), key);
-        
+
         MetricsMonitor.getListenConfigCountMonitor().set(cacheMap.get().size());
-        
+
         return cache;
     }
-    
+
     /**
      * Add cache data if absent.
      *
@@ -254,36 +252,36 @@ public class ClientWorker implements Closeable {
                     cache.setContent(ct[0]);
                 }
             }
-            
+
             Map<String, CacheData> copy = new HashMap<String, CacheData>(this.cacheMap.get());
             copy.put(key, cache);
             cacheMap.set(copy);
         }
         LOGGER.info("[{}] [subscribe] {}", agent.getName(), key);
-        
+
         MetricsMonitor.getListenConfigCountMonitor().set(cacheMap.get().size());
-        
+
         return cache;
     }
-    
+
     public CacheData getCache(String dataId, String group) {
         return getCache(dataId, group, TenantUtil.getUserTenantForAcm());
     }
-    
+
     public CacheData getCache(String dataId, String group, String tenant) {
         if (null == dataId || null == group) {
             throw new IllegalArgumentException();
         }
         return cacheMap.get().get(GroupKey.getKeyTenant(dataId, group, tenant));
     }
-    
+
     public String[] getServerConfig(String dataId, String group, String tenant, long readTimeout)
             throws NacosException {
         String[] ct = new String[2];
         if (StringUtils.isBlank(group)) {
             group = Constants.DEFAULT_GROUP;
         }
-        
+
         HttpRestResult<String> result = null;
         try {
             Map<String, String> params = new HashMap<String, String>(3);
@@ -303,7 +301,7 @@ public class ClientWorker implements Closeable {
             LOGGER.error(message, ex);
             throw new NacosException(NacosException.SERVER_ERROR, ex);
         }
-        
+
         switch (result.getCode()) {
             case HttpURLConnection.HTTP_OK:
                 LocalConfigInfoProcessor.saveSnapshot(agent.getName(), dataId, group, tenant, result.getData());
@@ -338,26 +336,26 @@ public class ClientWorker implements Closeable {
             }
         }
     }
-    
+
     private void checkLocalConfig(CacheData cacheData) {
         final String dataId = cacheData.dataId;
         final String group = cacheData.group;
         final String tenant = cacheData.tenant;
         File path = LocalConfigInfoProcessor.getFailoverFile(agent.getName(), dataId, group, tenant);
-        
+
         if (!cacheData.isUseLocalConfigInfo() && path.exists()) {
             String content = LocalConfigInfoProcessor.getFailover(agent.getName(), dataId, group, tenant);
             final String md5 = MD5Utils.md5Hex(content, Constants.ENCODE);
             cacheData.setUseLocalConfigInfo(true);
             cacheData.setLocalConfigInfoVersion(path.lastModified());
             cacheData.setContent(content);
-            
+
             LOGGER.warn(
                     "[{}] [failover-change] failover file created. dataId={}, group={}, tenant={}, md5={}, content={}",
                     agent.getName(), dataId, group, tenant, md5, ContentUtils.truncateContent(content));
             return;
         }
-        
+
         // If use local config info, then it doesn't notify business listener and notify after getting from server.
         if (cacheData.isUseLocalConfigInfo() && !path.exists()) {
             cacheData.setUseLocalConfigInfo(false);
@@ -365,7 +363,7 @@ public class ClientWorker implements Closeable {
                     dataId, group, tenant);
             return;
         }
-        
+
         // When it changed.
         if (cacheData.isUseLocalConfigInfo() && path.exists() && cacheData.getLocalConfigInfoVersion() != path
                 .lastModified()) {
@@ -379,11 +377,11 @@ public class ClientWorker implements Closeable {
                     agent.getName(), dataId, group, tenant, md5, ContentUtils.truncateContent(content));
         }
     }
-    
+
     private String null2defaultGroup(String group) {
         return (null == group) ? Constants.DEFAULT_GROUP : group.trim();
     }
-    
+
     /**
      * Check config info.
      */
@@ -400,7 +398,7 @@ public class ClientWorker implements Closeable {
             currentLongingTaskCount = longingTaskCount;
         }
     }
-    
+
     /**
      * Fetch the dataId list from server.
      *
@@ -431,7 +429,7 @@ public class ClientWorker implements Closeable {
         boolean isInitializingCacheList = !inInitializingCacheList.isEmpty();
         return checkUpdateConfigStr(sb.toString(), isInitializingCacheList);
     }
-    
+
     /**
      * Fetch the updated dataId list from server.
      *
@@ -441,30 +439,30 @@ public class ClientWorker implements Closeable {
      * @throws IOException Exception.
      */
     List<String> checkUpdateConfigStr(String probeUpdateString, boolean isInitializingCacheList) throws Exception {
-        
+
         Map<String, String> params = new HashMap<String, String>(2);
         params.put(Constants.PROBE_MODIFY_REQUEST, probeUpdateString);
         Map<String, String> headers = new HashMap<String, String>(2);
         headers.put("Long-Pulling-Timeout", "" + timeout);
-        
+
         // told server do not hang me up if new initializing cacheData added in
         if (isInitializingCacheList) {
             headers.put("Long-Pulling-Timeout-No-Hangup", "true");
         }
-        
+
         if (StringUtils.isBlank(probeUpdateString)) {
             return Collections.emptyList();
         }
-        
+
         try {
             // In order to prevent the server from handling the delay of the client's long task,
             // increase the client's read timeout to avoid this problem.
-            
+
             long readTimeoutMs = timeout + (long) Math.round(timeout >> 1);
             HttpRestResult<String> result = agent
                     .httpPost(Constants.CONFIG_CONTROLLER_PATH + "/listener", headers, params, agent.getEncode(),
                             readTimeoutMs);
-            
+
             if (result.ok()) {
                 setHealthServer(true);
                 return parseUpdateDataIdResponse(result.getData());
@@ -480,7 +478,7 @@ public class ClientWorker implements Closeable {
         }
         return Collections.emptyList();
     }
-    
+
     /**
      * Get the groupKey list from the http response.
      *
@@ -491,15 +489,15 @@ public class ClientWorker implements Closeable {
         if (StringUtils.isBlank(response)) {
             return Collections.emptyList();
         }
-        
+
         try {
             response = URLDecoder.decode(response, "UTF-8");
         } catch (Exception e) {
             LOGGER.error("[" + agent.getName() + "] [polling-resp] decode modifiedDataIdsString error", e);
         }
-        
+
         List<String> updateList = new LinkedList<String>();
-        
+
         for (String dataIdAndGroup : response.split(LINE_SEPARATOR)) {
             if (!StringUtils.isBlank(dataIdAndGroup)) {
                 String[] keyArr = dataIdAndGroup.split(WORD_SEPARATOR);
@@ -522,17 +520,17 @@ public class ClientWorker implements Closeable {
         }
         return updateList;
     }
-    
+
     @SuppressWarnings("PMD.ThreadPoolCreationRule")
     public ClientWorker(final HttpAgent agent, final ConfigFilterChainManager configFilterChainManager,
             final Properties properties) {
         this.agent = agent;
         this.configFilterChainManager = configFilterChainManager;
-        
+
         // Initialize the timeout parameter
-        
+
         init(properties);
-        
+
         this.executor = Executors.newScheduledThreadPool(1, new ThreadFactory() {
             @Override
             public Thread newThread(Runnable r) {
@@ -542,18 +540,17 @@ public class ClientWorker implements Closeable {
                 return t;
             }
         });
-        
-        this.executorService = Executors
-                .newScheduledThreadPool(Runtime.getRuntime().availableProcessors(), new ThreadFactory() {
-                    @Override
-                    public Thread newThread(Runnable r) {
-                        Thread t = new Thread(r);
-                        t.setName("com.alibaba.nacos.client.Worker.longPolling." + agent.getName());
-                        t.setDaemon(true);
-                        return t;
-                    }
-                });
-        
+
+        this.executorService = Executors.newScheduledThreadPool(longPollingThreadSize, new ThreadFactory() {
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread t = new Thread(r);
+                t.setName("com.alibaba.nacos.client.Worker.longPolling." + agent.getName());
+                t.setDaemon(true);
+                return t;
+            }
+        });
+
         this.executor.scheduleWithFixedDelay(new Runnable() {
             @Override
             public void run() {
@@ -565,19 +562,22 @@ public class ClientWorker implements Closeable {
             }
         }, 1L, 10L, TimeUnit.MILLISECONDS);
     }
-    
+
     private void init(Properties properties) {
-        
+
         timeout = Math.max(ConvertUtils.toInt(properties.getProperty(PropertyKeyConst.CONFIG_LONG_POLL_TIMEOUT),
                 Constants.CONFIG_LONG_POLL_TIMEOUT), Constants.MIN_CONFIG_LONG_POLL_TIMEOUT);
-        
+
         taskPenaltyTime = ConvertUtils
                 .toInt(properties.getProperty(PropertyKeyConst.CONFIG_RETRY_TIME), Constants.CONFIG_RETRY_TIME);
-        
+
         this.enableRemoteSyncConfig = Boolean
                 .parseBoolean(properties.getProperty(PropertyKeyConst.ENABLE_REMOTE_SYNC_CONFIG));
+
+        this.longPollingThreadSize = Integer
+                .parseInt(properties.getProperty(PropertyKeyConst.LONG_POLLING_THREAD_SIZE, Constants.LONG_POLLING_THREAD_SIZE));
     }
-    
+
     @Override
     public void shutdown() throws NacosException {
         String className = this.getClass().getName();
@@ -586,18 +586,18 @@ public class ClientWorker implements Closeable {
         ThreadUtils.shutdownThreadPool(executor, LOGGER);
         LOGGER.info("{} do shutdown stop", className);
     }
-    
+
     class LongPollingRunnable implements Runnable {
-        
+
         private final int taskId;
-        
+
         public LongPollingRunnable(int taskId) {
             this.taskId = taskId;
         }
-        
+
         @Override
         public void run() {
-            
+
             List<CacheData> cacheDatas = new ArrayList<CacheData>();
             List<String> inInitializingCacheList = new ArrayList<String>();
             try {
@@ -615,13 +615,13 @@ public class ClientWorker implements Closeable {
                         }
                     }
                 }
-                
+
                 // check server config
                 List<String> changedGroupKeys = checkUpdateDataIds(cacheDatas, inInitializingCacheList);
                 if (!CollectionUtils.isEmpty(changedGroupKeys)) {
                     LOGGER.info("get changedGroupKeys:" + changedGroupKeys);
                 }
-                
+
                 for (String groupKey : changedGroupKeys) {
                     String[] key = GroupKey.parseKey(groupKey);
                     String dataId = key[0];
@@ -655,47 +655,49 @@ public class ClientWorker implements Closeable {
                     }
                 }
                 inInitializingCacheList.clear();
-                
+
                 executorService.execute(this);
-                
+
             } catch (Throwable e) {
-                
+
                 // If the rotation training task is abnormal, the next execution time of the task will be punished
                 LOGGER.error("longPolling error : ", e);
                 executorService.schedule(this, taskPenaltyTime, TimeUnit.MILLISECONDS);
             }
         }
     }
-    
+
     public boolean isHealthServer() {
         return isHealthServer;
     }
-    
+
     private void setHealthServer(boolean isHealthServer) {
         this.isHealthServer = isHealthServer;
     }
-    
+
     final ScheduledExecutorService executor;
-    
+
     final ScheduledExecutorService executorService;
-    
+
     /**
      * groupKey -> cacheData.
      */
     private final AtomicReference<Map<String, CacheData>> cacheMap = new AtomicReference<Map<String, CacheData>>(
             new HashMap<String, CacheData>());
-    
+
     private final HttpAgent agent;
-    
+
     private final ConfigFilterChainManager configFilterChainManager;
-    
+
     private boolean isHealthServer = true;
-    
+
     private long timeout;
-    
+
     private double currentLongingTaskCount = 0;
-    
+
     private int taskPenaltyTime;
-    
+
     private boolean enableRemoteSyncConfig = false;
+
+    private int longPollingThreadSize;
 }
